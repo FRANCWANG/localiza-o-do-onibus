@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ônibus - Rota Real | Recreio → IBMEC → Botafogo</title>
+    
+    <!-- CSS do Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        
+        .info-box {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .info-box p {
+            font-size: 18px;
+            color: #333;
+        }
+        
+        .info-box span {
+            color: #007bff;
+            font-weight: bold;
+        }
+        
+        .btn-mover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+        }
+        
+        .btn-mover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .btn-mover:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .mapa {
+            height: 500px;
+            width: 100%;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 2px solid #ddd;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 10px;
+            background: #e8f5e9;
+            border-radius: 8px;
+            color: #2e7d32;
+            font-weight: bold;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 10px;
+            background: #fff3e0;
+            border-radius: 8px;
+            color: #ff9800;
+            margin-top: 10px;
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 15px; }
+            h1 { font-size: 22px; }
+            .info-box { flex-direction: column; text-align: center; }
+            .mapa { height: 400px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚍 Ônibus - Rota Real</h1>
+        <h2 style="text-align:center; font-size:16px; color:#666;">Recreio Shopping → IBMEC Barra → Botafogo</h2>
+        
+        <div class="info-box">
+            <p>📍 <strong>Posição atual:</strong> <span id="posicao">Calculando rota...</span></p>
+            <button id="btn-mover" class="btn-mover" disabled>⏳ Carregando rota...</button>
+        </div>
+        
+        <div id="mapa" class="mapa"></div>
+        
+        <div class="status">
+            <p>🟢 Ônibus segue o traçado REAL das ruas (OpenRouteService)</p>
+        </div>
+        <div class="loading" id="loading-status">
+            🗺️ Calculando rota pela API...
+        </div>
+    </div>
+
+    <!-- JavaScript do Leaflet -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+        // ============= FIREBASE CONFIGURATION =============
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyC6qAxX6YoWUCrO1ibPcJ3yOAKhqkQFTdI",
+            authDomain: "localizacao-1680d.firebaseapp.com",
+            projectId: "localizacao-1680d",
+            storageBucket: "localizacao-1680d.firebasestorage.app",
+            messagingSenderId: "1097659155123",
+            appId: "1:1097659155123:web:5f5a65c656436ea27ee6c6",
+            measurementId: "G-56L9X6B1K3",
+            databaseURL: "https://localizacao-1680d-default-rtdb.firebaseio.com"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+
+        // Função para salvar posição no Firebase
+        window.salvarNoFirebase = async function(nomePosicao, latitude, longitude) {
+            try {
+                const posRef = ref(database, "onibus/posicao_atual");
+                await set(posRef, {
+                    local: nomePosicao,
+                    latitude: latitude,
+                    longitude: longitude,
+                    horario: new Date().toISOString(),
+                    timestamp: Date.now()
+                });
+                console.log("✓ Posição salva no Firebase:", nomePosicao);
+            } catch (error) {
+                console.error("✗ Erro ao salvar no Firebase:", error);
+            }
+        };
+
+        // Função para salvar localização IBMEC especificamente
+        window.salvarIBMECNoFirebase = async function() {
+            try {
+                const ibmecRef = ref(database, "localizacoes/ibmec_barra");
+                await set(ibmecRef, {
+                    nome: "IBMEC Campus Barra",
+                    latitude: -22.9835,
+                    longitude: -43.3630,
+                    endereco: "Av. Armando Lombardi - Barra da Tijuca, Rio de Janeiro - RJ",
+                    campus: "Barra",
+                    atualizado: new Date().toISOString()
+                });
+                console.log("✓ Localização IBMEC Barra salva no Firebase!");
+            } catch (error) {
+                console.error("✗ Erro ao salvar IBMEC:", error);
+            }
+        };
+    </script>
+    
+    <script>
+        // SUA CHAVE API DO OPENROUTESERVICE
+        const API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjJhMTAwYTEwNjFiOTRmYzY5NmQzZDZiZmZlMTAyOGIyIiwiaCI6Im11cm11cjY0In0=";
+        
+        // Pontos da rota com coordenadas CORRETAS
+        // Recreio Shopping: -23.0211, -43.4883
+        // IBMEC Barra: Av. Armando Lombardi (posição correta)
+        // Botafogo: -22.9463, -43.1818
+        
+        const recreio = { lat: -23.0211, lng: -43.4883, nome: "🛍️ Recreio Shopping" };
+        const ibmec = { lat: -22.9835, lng: -43.3630, nome: "🏫 IBMEC Barra - Av. Armando Lombardi" };
+        const botafogo = { lat: -22.9463, lng: -43.1818, nome: "📚 Botafogo" };
+        
+        const waypoints = [recreio, ibmec, botafogo];
+        
+        let rotaCoordenadas = [];
+        let indice = 0;
+        let mapa;
+        let marcador;
+        let linhaRota;
+        
+        // Inicializa o mapa
+        function inicializarMapa() {
+            mapa = L.map('mapa').setView([-23.0, -43.35], 11);
+            
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(mapa);
+            
+            // Adiciona marcadores dos pontos principais
+            L.marker([recreio.lat, recreio.lng]).addTo(mapa).bindPopup(recreio.nome);
+            L.marker([ibmec.lat, ibmec.lng]).addTo(mapa).bindPopup(ibmec.nome);
+            L.marker([botafogo.lat, botafogo.lng]).addTo(mapa).bindPopup(botafogo.nome);
+        }
+        
+        // Busca a rota real na API OpenRouteService
+        async function buscarRota() {
+            const start = `${recreio.lng},${recreio.lat}`;
+            const end = `${botafogo.lng},${botafogo.lat}`;
+            
+            const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${API_KEY}&start=${start}&end=${end}`;
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error?.message || "Erro na API");
+                }
+                
+                // Extrai as coordenadas da rota
+                const coordinatesRoute = data.features[0].geometry.coordinates;
+                rotaCoordenadas = coordinatesRoute.map(coord => [coord[1], coord[0]]);
+                
+                // Desenha a rota no mapa
+                linhaRota = L.polyline(rotaCoordenadas, {
+                    color: '#ff9800',
+                    weight: 6,
+                    opacity: 0.9
+                }).addTo(mapa);
+                
+                // Ajusta o zoom para mostrar toda a rota
+                mapa.fitBounds(linhaRota.getBounds());
+                
+                // Cria o marcador do ônibus no início da rota
+                marcador = L.marker(rotaCoordenadas[0], {
+                    title: "Ônibus"
+                }).addTo(mapa);
+                marcador.bindPopup("🚍 Ônibus - Recreio Shopping").openPopup();
+                
+                document.getElementById("posicao").innerHTML = "🛍️ Recreio Shopping";
+                document.getElementById("btn-mover").disabled = false;
+                document.getElementById("btn-mover").innerHTML = "▶️ Mover Ônibus";
+                document.getElementById("loading-status").innerHTML = "✅ Rota carregada com sucesso! Clique no botão para mover o ônibus.";
+                document.getElementById("loading-status").style.background = "#e8f5e9";
+                document.getElementById("loading-status").style.color = "#2e7d32";
+                
+                // Salvar posição inicial no Firebase
+                if (window.salvarNoFirebase) {
+                    window.salvarNoFirebase("🛍️ Recreio Shopping", recreio.lat, recreio.lng);
+                }
+                
+            } catch (error) {
+                console.error("Erro ao carregar rota:", error);
+                document.getElementById("loading-status").innerHTML = `❌ Erro: ${error.message}. Verifique sua chave API.`;
+                document.getElementById("loading-status").style.background = "#ffebee";
+                document.getElementById("loading-status").style.color = "#c62828";
+            }
+        }
+        
+        // Move o ônibus para o próximo ponto da rota real
+        function moverOnibus() {
+            if (rotaCoordenadas.length === 0) return;
+            
+            indice = (indice + 1) % rotaCoordenadas.length;
+            const ponto = rotaCoordenadas[indice];
+            
+            marcador.setLatLng(ponto);
+            mapa.setView(ponto, 14);
+            
+            // Determina o nome da posição baseado na proximidade dos pontos
+            let nomePosicao = `📍 Ponto ${indice + 1}`;
+            
+            // Distância até o IBMEC (Av. Armando Lombardi)
+            const distIBMEC = Math.sqrt(
+                Math.pow(ponto[0] - ibmec.lat, 2) + 
+                Math.pow(ponto[1] - ibmec.lng, 2)
+            );
+            
+            // Distância até o Recreio
+            const distRecreio = Math.sqrt(
+                Math.pow(ponto[0] - recreio.lat, 2) + 
+                Math.pow(ponto[1] - recreio.lng, 2)
+            );
+            
+            // Distância até Botafogo
+            const distBotafogo = Math.sqrt(
+                Math.pow(ponto[0] - botafogo.lat, 2) + 
+                Math.pow(ponto[1] - botafogo.lng, 2)
+            );
+            
+            if (distRecreio < 0.003) {
+                nomePosicao = "🛍️ Recreio Shopping";
+            } else if (distIBMEC < 0.003) {
+                nomePosicao = "🏫 IBMEC Barra - Av. Armando Lombardi";
+            } else if (distBotafogo < 0.005) {
+                nomePosicao = "📚 Botafogo";
+            } else if (indice === 0) {
+                nomePosicao = "🛍️ Recreio Shopping";
+            } else if (indice === rotaCoordenadas.length - 1) {
+                nomePosicao = "📚 Botafogo";
+            }
+            
+            document.getElementById("posicao").innerHTML = nomePosicao;
+            marcador.bindPopup(`🚍 Ônibus - ${nomePosicao}`).openPopup();
+            
+            // Salvar posição no Firebase
+            if (window.salvarNoFirebase) {
+                window.salvarNoFirebase(nomePosicao, ponto[0], ponto[1]);
+            }
+            
+            // Se chegar no IBMEC, salvá especificamente
+            if (nomePosicao.includes("IBMEC") && window.salvarIBMECNoFirebase) {
+                window.salvarIBMECNoFirebase();
+            }
+        }
+        
+        // Conecta o botão
+        document.getElementById("btn-mover").addEventListener("click", moverOnibus);
+        
+        // Inicia tudo
+        window.onload = () => {
+            inicializarMapa();
+            buscarRota();
+        };
+    </script>
+</body>
+</html>
